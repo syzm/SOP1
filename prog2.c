@@ -1,48 +1,53 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <errno.h>
 #include <dirent.h>
-#include <ftw.h>
 #include <sys/stat.h>
+#include <errno.h>
 #include <string.h>
 
-
-#define MAX_PATH 101
 #define ERR(source) (perror(source), fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), exit(EXIT_FAILURE))
+#define MAX_PATH 100
+
+
 
 void usage(char *pname) {
     fprintf(stderr, "Usage: %s [OPTION]...\n"
                     "Listuje pliki i ich rozmiary w podanych katalogach.\n"
-                    "  -o PLIK\t\tzapisuje wyjscie programy w PLIK, max. 1\n"
                     "  -p KATALOG\t\tkatalog do wylistowania\n"
-                    "  -r (opcjonalne)\t\tskanuje takze podkatalogi \n"
-                    "  -s (opcjonalne)\t\tnie pomija symlinkow\n"
-                    "  -n NAZWA\t\t pomija skanowanie plikow i katalogow rozpoczynajacych sie dana nazwa\n", pname);
+                    "  -e ROZSZERZENIE\t\t(opcjonalne) pomin pliki z danym rozszerzeniem\n"
+                    "  -d LICZBA\t\t\tglebokosc skanowania\n"
+                    "  -o PLIK\t\tzapisuje wyjscie programu w PLIK\n"
+            , pname);
     exit(EXIT_FAILURE);
 }
 
-int startswith(const char *pre, const char *str) {
-    return strncmp(pre, str, strlen(pre)) == 0;
+
+int has_extension(const char *filename, const char *ext)
+{
+    if('.' != filename[strlen(filename) - strlen(ext) - 1])
+    {
+        return 0;
+    }
+    return !strcmp(filename + strlen(filename) - strlen(ext), ext);
 }
 
-void list_dir(char *dirName, FILE *out, char *prefix, int recursive, int symlinks) {
+void list_dir(char* dirName, FILE* out, int depth, char* ext){
     DIR *dirp;
     struct dirent *dp;
     struct stat filestat;
+
 
     if (NULL == (dirp = opendir(dirName))) {
         if (errno == ENOENT) {
             fprintf(stderr, "No such file or directory: %s\n", dirName);
             return;
         }
-
         if (errno == EACCES)
         {
             fprintf(stderr, "No access: %s\n", dirName);
             return;
         }
-
         ERR("opendir");
     }
 
@@ -52,7 +57,7 @@ void list_dir(char *dirName, FILE *out, char *prefix, int recursive, int symlink
         if ((dp = readdir(dirp)) != NULL) {
             char path[MAX_PATH];
 
-            if (dp->d_name[0] == '.' || (prefix && startswith(prefix, dp->d_name)))
+            if (dp->d_name[0] == '.')
                 continue;
 
             if (snprintf(path, MAX_PATH, "%s/%s", dirName, dp->d_name) >= MAX_PATH) {
@@ -62,19 +67,21 @@ void list_dir(char *dirName, FILE *out, char *prefix, int recursive, int symlink
                 return;
             }
 
-            if (symlinks ? stat(path, &filestat) : lstat(path, &filestat)) {
+            if (lstat(path, &filestat)) {
                 fprintf(stderr, "%s\n", path);
                 ERR("lstat");
             }
 
-            if(recursive && S_ISDIR(filestat.st_mode))
+            if(depth > 1 && S_ISDIR(filestat.st_mode))
             {
-                list_dir(path, out, prefix, recursive);
+                list_dir(path, out, depth - 1, ext);
             }
-            else
-            {
+
+            if(ext != NULL && has_extension(dp->d_name, ext))
+                continue;
+
+            if(!S_ISDIR(filestat.st_mode))
                 fprintf(out, "%s %ld\n", dp->d_name, filestat.st_size);
-            }
         }
     } while (dp != NULL);
 
@@ -84,61 +91,64 @@ void list_dir(char *dirName, FILE *out, char *prefix, int recursive, int symlink
         ERR("closedir");
 }
 
-int main(int argc, char **argv) {
-    char c;
-    int recursive = 0;
-    int symlinks = 0;
-    FILE *out = stdout;
-    char *prefix = NULL;
 
-    while ((c = getopt(argc, argv, "p:o:rsn:")) != -1) {
-        switch (c) {
+int main(int argc, char **argv)
+{
+    char c;
+    FILE *out = stdout;
+    char *env = getenv("L1_OUTPUTFILE");
+    int depth = 1;
+    char* ext = NULL;
+
+    while((c = getopt(argc, argv, "p:oe:d:")) != -1)
+    {
+        switch(c)
+        {
             case 'o':
-                if (out != stdout)
+                if(out != stdout)
+                {
                     usage(argv[0]);
-                if ((out = fopen(optarg, "w")) == NULL)
+                }
+                if ((out = fopen(env, "w")) == NULL)
                     ERR("fopen");
                 break;
+            case 'd':
+                depth = atoi(optarg);
+                break;
+            case 'e':
+                ext = optarg;
+                break;
             case 'p':
-                break;
-            case 'r':
-                recursive = 1;
-                break;
-            case 'n':
-                prefix = optarg;
-                break;
-            case 's':
-                symlinks = 1;
                 break;
             case '?':
             default:
                 usage(argv[0]);
+
         }
     }
 
-    if (argc > optind)
+    if (argc > optind) {
         usage(argv[0]);
-
-
+    }
 
     optind = 0;
 
-    while ((c = getopt(argc, argv, "p:o:rsn:")) != -1) {
-        switch (c) {
+    while((c = getopt(argc, argv, "p:oe:d:")) != -1)
+    {
+        switch(c)
+        {
             case 'p':
-                list_dir(optarg, out, prefix, recursive, symlinks);
-                break;
+                list_dir(optarg, out, depth, ext);
             case 'o':
                 break;
-            case 'n':
+            case 'd':
                 break;
-            case 's':
-                break;
-            case 'r':
+            case 'e':
                 break;
             case '?':
             default:
                 usage(argv[0]);
+
         }
     }
 
@@ -151,6 +161,5 @@ int main(int argc, char **argv) {
         ERR("fclose");
 
     return EXIT_SUCCESS;
-
 
 }
